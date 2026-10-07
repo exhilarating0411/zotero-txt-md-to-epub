@@ -38,6 +38,8 @@ Zotero 9.0.5 requires `applications.zotero.update_url` in `manifest.json`, so th
 
 ## Install
 
+[Download the v0.4.0 XPI installer](https://github.com/exhilarating0411/zotero-txt-md-to-epub/raw/refs/heads/main/releases/txt-md-to-epub-for-zotero-0.4.0.xpi)
+
 1. Download the `.xpi` package from a release.
 2. Open Zotero.
 3. Go to `Tools` -> `Plugins`.
