@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.0
+
+- Add Tools-menu import of public GitBook course URLs using their published Markdown index.
+- Embed downloaded images, preserve chapter order, and generate a hierarchical EPUB table of contents.
+- Store the EPUB as a managed attachment in the collection selected when the import window opens.
+- Add progress, cancellation, bounded retries, resource limits, and explicit failure reporting.
+- Sanitize downloaded HTML and validate generated XML before packaging.
+- Add Zotero 10 compatibility while retaining the Zotero 9 minimum version.
+- Keep existing TXT/Markdown conversion behavior unchanged.
+
 ## 0.3.5
 
 - Keep the original TXT/Markdown source file and Zotero attachment after conversion.

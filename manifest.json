@@ -1,16 +1,16 @@
 {
   "manifest_version": 2,
   "name": "TXT/Markdown to EPUB for Zotero",
-  "version": "0.3.5",
-  "description": "Convert selected TXT and Markdown attachments into EPUB attachments in Zotero.",
+  "version": "0.4.0",
+  "description": "Convert TXT/Markdown attachments or a public GitBook course with images into an offline EPUB.",
   "author": "Codex",
-  "homepage_url": "https://www.zotero.org/",
+  "homepage_url": "https://github.com/exhilarating0411/zotero-txt-md-to-epub",
   "applications": {
     "zotero": {
       "id": "txt-md-to-epub@local.codex",
       "update_url": "https://example.com/txt-md-to-epub-for-zotero/update.json",
       "strict_min_version": "9.0.0",
-      "strict_max_version": "9.99.99"
+      "strict_max_version": "10.*"
     }
   }
 }

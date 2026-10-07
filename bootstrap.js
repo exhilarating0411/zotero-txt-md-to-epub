@@ -6,12 +6,20 @@ const FTL_FILE = "txt-md-to-epub.ftl";
 
 var registeredMenuID = null;
 var txtMdToEpubServices = null;
+var pluginRoot = '';
+var courseWindows = new Set();
+var courseScope = null;
+var courseChrome = null;
 
 function install() {}
 
 function uninstall() {}
 
-async function startup() {
+async function startup(data) {
+  pluginRoot = data.rootURI || data.resourceURI?.spec;
+  courseChrome = Components.classes['@mozilla.org/addons/addon-manager-startup;1']
+    .getService(Components.interfaces.amIAddonManagerStartup)
+    .registerChrome(getServices().io.newURI(pluginRoot + 'manifest.json'), [['content', 'txt-md-to-epub', pluginRoot]]);
   log("startup");
   registerMenu();
 
@@ -21,6 +29,10 @@ async function startup() {
 }
 
 function shutdown() {
+  for (const dialog of courseWindows) dialog.close();
+  courseWindows.clear();
+  courseChrome?.destruct();
+  courseChrome = null;
   log("shutdown");
   unregisterMenu();
 
@@ -31,9 +43,18 @@ function shutdown() {
 
 function onMainWindowLoad({ window }) {
   window.MozXULElement.insertFTLIfNeeded(FTL_FILE);
+  const tools = window.document.getElementById('menu_ToolsPopup');
+  if (tools && !window.document.getElementById('gitbook-epub-import')) {
+    const item = window.document.createXULElement('menuitem');
+    item.id = 'gitbook-epub-import';
+    item.setAttribute('data-l10n-id', 'txt-md-to-epub-menu-web');
+    item.addEventListener('command', () => openCourseImport(window));
+    tools.appendChild(item);
+  }
 }
 
 function onMainWindowUnload({ window }) {
+  window.document.getElementById('gitbook-epub-import')?.remove();
   window.document.querySelector(`link[rel="localization"][href="${FTL_FILE}"]`)?.remove();
 }
 
@@ -443,10 +464,131 @@ function log(message) {
 
 function getServices() {
   if (!txtMdToEpubServices) {
-    txtMdToEpubServices = globalThis.Services;
+    txtMdToEpubServices = globalThis.Services || Zotero.getMainWindow().Services;
     if (!txtMdToEpubServices) {
       throw new Error("Zotero did not expose the global Services object.");
     }
   }
   return txtMdToEpubServices;
+}
+
+function openCourseImport(win) {
+  const collection = win.ZoteroPane.getSelectedCollection();
+  const libraryID = win.ZoteroPane.getSelectedLibraryID();
+  const library = Zotero.Libraries.get(libraryID);
+  if (!library?.editable || library.filesEditable === false) {
+    Zotero.alert(win, 'EPUB', 'This library does not allow importing attachments.');
+    return;
+  }
+  const destination = { libraryID, collections: collection ? [collection.id] : [] };
+  const args = {
+    destination: collection ? `${library.name} / ${collection.name}` : library.name,
+    run: (options) => importCourse(win, destination, options)
+  };
+  const dialog = win.openDialog('chrome://txt-md-to-epub/content/course-dialog.xhtml', '', 'chrome,centerscreen,resizable,width=640,height=460', args);
+  courseWindows.add(dialog);
+  dialog.addEventListener('unload', () => courseWindows.delete(dialog), { once: true });
+}
+
+function getCourseScope(win) {
+  if (!courseScope) {
+    courseScope = { URL: win.URL };
+    courseScope.globalThis = courseScope;
+    getServices().scriptloader.loadSubScript(pluginRoot + 'markdown-it.min.js', courseScope);
+    getServices().scriptloader.loadSubScript(pluginRoot + 'gitbook.js', courseScope);
+  }
+  return courseScope;
+}
+
+async function importCourse(win, destination, options) {
+  const work = makeTempDirectory('gitbook-epub');
+  const files = [];
+  const requests = new Set();
+  let stopped = false;
+  const cancelled = () => stopped || options.cancelled();
+  const timer = win.setInterval(() => {
+    if (cancelled()) for (const request of requests) request.abort();
+  }, 200);
+  try {
+    const read = async (url, binary) => {
+      let lastError;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (cancelled()) throw new Error('Cancelled');
+        let request;
+        try {
+          const response = await Zotero.HTTP.request('GET', url, {
+            responseType: binary ? 'arraybuffer' : 'text', timeout: 30000,
+            anon: true, errorDelayMax: 0,
+            requestObserver: xhr => {
+              request = xhr;
+              requests.add(xhr);
+              xhr.addEventListener('progress', event => {
+                if (event.loaded > (binary ? 50 : 5) * 1024 * 1024) xhr.abort();
+              });
+            }
+          });
+          return binary ? new Uint8Array(response.response) : response.responseText;
+        } catch (err) {
+          lastError = err;
+          if (cancelled() || (err.status >= 400 && err.status < 500 && err.status !== 429)) break;
+          if (attempt < 2) await Zotero.Promise.delay(1000 * (attempt + 1));
+        } finally { if (request) requests.delete(request); }
+      }
+      throw new Error(cancelled() ? 'Cancelled' : `Download failed: ${url}\n${lastError.message || lastError}`);
+    };
+    const write = async (name, data) => {
+      if (/\.(xml|xhtml|opf)$/.test(name) && new win.DOMParser().parseFromString(data, 'application/xml').querySelector('parsererror')) {
+        throw new Error(`Invalid EPUB XML: ${name}`);
+      }
+      const parts = name.split('/');
+      let directory = work;
+      for (const part of parts.slice(0, -1)) directory = ensureChildDirectory(directory, part);
+      const path = pathJoin(directory.path, parts[parts.length - 1]);
+      if (typeof data === 'string') await Zotero.File.putContentsAsync(path, data);
+      else await win.IOUtils.write(path, data);
+      files.push(name);
+    };
+    const convertWebP = async bytes => {
+      const url = win.URL.createObjectURL(new win.Blob([bytes], { type: 'image/webp' }));
+      try {
+        const image = new win.Image();
+        await new Promise((resolve, reject) => { image.onload = resolve; image.onerror = () => reject(new Error('Invalid WebP image')); image.src = url; });
+        if (image.naturalWidth * image.naturalHeight > 40000000) throw new Error('Image dimensions exceed 40 megapixels.');
+        const canvas = win.document.createElementNS('http://www.w3.org/1999/xhtml', 'canvas');
+        canvas.width = image.naturalWidth; canvas.height = image.naturalHeight;
+        canvas.getContext('2d').drawImage(image, 0, 0);
+        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+        return new Uint8Array(await blob.arrayBuffer());
+      } finally { win.URL.revokeObjectURL(url); }
+    };
+    const result = await getCourseScope(win).GitBookEPUB.build({ ...options, read, write, cancelled, convertWebP, DOMParser: win.DOMParser, XMLSerializer: win.XMLSerializer });
+    if (cancelled()) throw new Error('Cancelled');
+    options.progress({ stage: 'pack' });
+    const epubPath = pathJoin(work.path, safeFilename(result.title) + '.epub');
+    const zip = Components.classes['@mozilla.org/zipwriter;1'].createInstance(Components.interfaces.nsIZipWriter);
+    zip.open(Zotero.File.pathToFile(epubPath), 0x04 | 0x08 | 0x20);
+    try {
+      const ordered = ['mimetype', ...files.filter(file => file !== 'mimetype')];
+      for (let i = 0; i < ordered.length; i++) {
+        if (cancelled()) throw new Error('Cancelled');
+        const file = ordered[i];
+        zip.addEntryFile(file, file === 'mimetype' ? 0 : Components.interfaces.nsIZipWriter.DEFAULT_COMPRESSION,
+          Zotero.File.pathToFile(pathJoin(work.path, ...file.split('/'))), false);
+        if (i % 20 === 0) await Zotero.Promise.delay(0);
+      }
+    } finally { zip.close(); }
+    if (cancelled()) throw new Error('Cancelled');
+    // Disable cancellation once Zotero starts the atomic attachment import.
+    options.progress({ stage: 'import' });
+    const item = await Zotero.Attachments.importFromFile({ ...destination, file: epubPath, title: result.title, contentType: 'application/epub+zip' });
+    result.path = await item.getFilePathAsync();
+    result.itemID = item.id;
+    try { await win.ZoteroPane.selectItems([item.id]); } catch (err) { log(String(err)); }
+    return result;
+  } finally {
+    stopped = true;
+    win.clearInterval(timer);
+    for (const request of requests) request.abort();
+    if (work.exists()) work.remove(true);
+  }
 }

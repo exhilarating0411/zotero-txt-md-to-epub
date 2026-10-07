@@ -2,7 +2,8 @@ $ErrorActionPreference = "Stop"
 
 $projectDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $outFile = Join-Path (Split-Path -Parent $projectDir) "txt-md-to-epub-for-zotero.xpi"
-$versionedOutFile = Join-Path (Split-Path -Parent $projectDir) "txt-md-to-epub-for-zotero-0.3.5.xpi"
+$version = (Get-Content -LiteralPath (Join-Path $projectDir "manifest.json") -Raw | ConvertFrom-Json).version
+$versionedOutFile = Join-Path (Split-Path -Parent $projectDir) "txt-md-to-epub-for-zotero-$version.xpi"
 $tmpZip = [System.IO.Path]::ChangeExtension($outFile, ".zip")
 
 if (Test-Path $outFile) {
@@ -18,6 +19,11 @@ if (Test-Path $tmpZip) {
 $files = @(
     "manifest.json",
     "bootstrap.js",
+    "gitbook.js",
+    "markdown-it.min.js",
+    "MARKDOWN-IT-LICENSE.txt",
+    "course-dialog.xhtml",
+    "course-dialog.js",
     "README.md",
     "locale/en-US/txt-md-to-epub.ftl",
     "locale/zh-CN/txt-md-to-epub.ftl"
